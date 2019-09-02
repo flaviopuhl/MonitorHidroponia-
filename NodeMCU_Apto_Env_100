@@ -1,0 +1,222 @@
+/************************************************************************
+* PROGRAM :        NodeMCU_Apto_Env            
+* 
+* DESCRIPTION :
+*       Monitor de temperatura e umidade no apartamento
+*
+* NOTES :
+*       Suporte DHT11 (Temp&Umidade Ambiente)...........[OK]
+*       Suporte DS18B20 (Temp do solo)..................[OK]
+*       Suporte para envio de dado ao Thinger.io........[OK]
+*       Suporte para programação OTA....................[OK]
+*        
+* HARDWARE:       
+*       DHT11 - D3
+*       DS18B20 - D1
+*     *       
+* AUTHOR :    Flávio Puhl        START DATE :    JUL19
+*
+* CHANGES :
+*
+*/
+
+/************************************************************************
+* Libraries
+************************************************************************/ 
+#include <SPI.h>
+#include <DHT.h>
+#include <OneWire.h>
+#include <DallasTemperature.h>  // Including the library of DS18B20
+//  WiFi
+#include <ESP8266WiFi.h>
+//  THINGER.IO 
+#include <ThingerESP8266.h>
+//  OTA
+#include <ESP8266mDNS.h>
+#include <WiFiUdp.h>
+#include <ArduinoOTA.h>
+
+/************************************************************************
+* Define pinout and constants
+************************************************************************/ 
+DHT dht(0, DHT11);      // DHT11 on nodemcu D3 
+OneWire oneWire(5);     // DS18B20 on nodemcu D1 
+DallasTemperature DS18B20(&oneWire);
+int LedPinG = 14;        //D5 Green
+int LedPinR = 12;        //D6 Red
+int LedPinB = 13;        //D7 Blue
+int ledState = LOW; 
+int pumpState = LOW; 
+
+int redeRSSI = 0;
+
+unsigned long previousMillis = 0;         // loop timer
+
+const long interval_led = 60000;          // 60 sec loop
+const long interval_pump = 60000;         // 60 sec loop
+
+/************************************************************************
+* Thinger.io connection parameters 
+************************************************************************/ 
+#define user "fpuhl"
+#define device_Id "Node"
+#define device_credentials "Hu$tZIOuj56r"
+ThingerESP8266 thing(user, device_Id, device_credentials);
+
+/************************************************************************
+* WiFi connection parameters and constants
+************************************************************************/ 
+const char WiFi_ssid[]="CasaDoTheodoro";      //WiFi SSID
+const char WiFi_password[]="09012011";        //WiFi password
+
+void setup() {
+
+/************************************************************************
+* Initialize functions
+************************************************************************/     
+    dht.begin();
+    DS18B20.begin();
+    Serial.begin(9600);
+
+    //pinMode(LedPinR, OUTPUT);
+    //pinMode(LedPinG, OUTPUT);
+    //pinMode(LedPinB, OUTPUT);
+    
+/************************************************************************
+* Setup WiFi
+************************************************************************/ 
+    WiFi.mode(WIFI_STA);
+    thing.add_wifi(WiFi_ssid, WiFi_password);
+      while (WiFi.waitForConnectResult() != WL_CONNECTED) {
+      Serial.println("Connection Failed! Rebooting...");
+      delay(3000);
+      ESP.restart();}
+
+/************************************************************************
+* OTA Functions - do not remove
+************************************************************************/ 
+    ArduinoOTA.onStart([]() {
+    Serial.println("Start");
+  });
+  ArduinoOTA.onEnd([]() {
+    Serial.println("\nEnd");
+  });
+  ArduinoOTA.onProgress([](unsigned int progress, unsigned int total) {
+    Serial.printf("Progress: %u%%\r", (progress / (total / 100)));
+  });
+  ArduinoOTA.onError([](ota_error_t error) {
+    Serial.printf("Error[%u]: ", error);
+    if (error == OTA_AUTH_ERROR) Serial.println("Auth Failed");
+    else if (error == OTA_BEGIN_ERROR) Serial.println("Begin Failed");
+    else if (error == OTA_CONNECT_ERROR) Serial.println("Connect Failed");
+    else if (error == OTA_RECEIVE_ERROR) Serial.println("Receive Failed");
+    else if (error == OTA_END_ERROR) Serial.println("End Failed");
+  });
+  ArduinoOTA.begin();
+  Serial.println("Ready");
+  Serial.print("IP address: ");
+  Serial.println(WiFi.localIP());
+  
+} //End setup
+
+void loop() {
+
+/************************************************************************
+* OTA & Thinger handles - do not remove
+************************************************************************/ 
+  ArduinoOTA.handle();
+  thing.handle();
+
+/************************************************************************
+* Data Acquisition
+************************************************************************/ 
+  DS18B20.requestTemperatures();
+  redeRSSI = WiFi.RSSI();
+  
+/************************************************************************
+* Thinger definitions
+************************************************************************/   
+  thing["data"] >> [](pson& out){
+    // Add the values and the corresponding code
+    out["h_dht11_ru"] = dht.readHumidity();
+    out["t_dht11_Celsius"] = dht.readTemperature();
+    out["t_DS18B20_Celsius"] = DS18B20.getTempCByIndex(0);
+    out["h_HL-69_%"] = map(analogRead(A0), 0, 1024, 0, 100);
+    out["r_RSSI_dB"] = WiFi.RSSI();
+  };
+
+/************************************************************************
+* Control artificial light
+************************************************************************/
+/*     unsigned long currentMillis = millis();
+     
+     if (currentMillis - previousMillis >= interval_led) {
+    // save the last time you blinked the LED
+    previousMillis = currentMillis;
+
+    // if the LED is off turn it on and vice-versa:
+    if (ledState == LOW) {
+      ledState = HIGH;} 
+    else {ledState = LOW;}
+     
+    }
+*/
+
+  thing["leds"] << [](pson& in){
+    analogWrite(LedPinR, in["LedR"]);
+    analogWrite(LedPinG, in["LedG"]);
+    analogWrite(LedPinB, in["LedB"]);
+  };
+    
+    //analogWrite(LedPinR, 0);
+    //analogWrite(LedPinG, 254);
+    //analogWrite(LedPinB, 254);
+
+/************************************************************************
+* Control water pump
+************************************************************************/
+/*     
+     if (currentMillis - previousMillis >= interval_pump) {
+    // save the last time you blinked the LED
+    previousMillis = currentMillis;
+
+    // if the LED is off turn it on and vice-versa:
+    if (ledState == LOW) {
+      ledState = HIGH;} 
+    else {ledState = LOW;}
+     
+    }
+*/
+
+/************************************************************************
+* Serial Debugg
+************************************************************************/ 
+   
+  Serial.print("DHT11 humidade = [");
+      Serial.print(dht.readHumidity());
+        Serial.print("%]");
+    Serial.println("");
+    Serial.print("DHT11 Temperatura = [");
+      Serial.print(dht.readTemperature()); 
+        Serial.print("C]");
+    Serial.println("");
+    Serial.print("DS18B20 temperatura = [");
+      Serial.print(DS18B20.getTempCByIndex(0)); 
+        Serial.print("C]");
+    Serial.println("");
+    Serial.print("HL-69 humidade = [");
+      Serial.print(analogRead(A0)); 
+        Serial.print("bits]");
+    Serial.println("");
+    Serial.print("WiFi RSSI = [");
+      Serial.print(redeRSSI); 
+        Serial.print("dB]");
+    Serial.println("");
+    Serial.println("");
+
+/************************************************************************
+* Loop time
+************************************************************************/ 
+   delay(1000);
+   
+}
